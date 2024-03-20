@@ -11,16 +11,13 @@ import android.os.IBinder
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-class MainService : Service() {
+class MainService_v1 : Service() {
+    private lateinit var imageAnalysis: ImageAnalysis
     private lateinit var cameraExecutor: ExecutorService
-    private var imageAnalysis: ImageAnalysis? = null
-    private var cameraProvider: ProcessCameraProvider? = null
     private val CHANNEL_ID = "CameraServiceChannel"
     private val NOTIFICATION_ID = 12345678
 
@@ -29,19 +26,6 @@ class MainService : Service() {
         cameraExecutor = Executors.newSingleThreadExecutor()
         isRunning = true
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, createNotification())
-    }
-
-    private fun createNotificationChannel() {
-        Log.d("tag_lc", "------- createNotificationChannel")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val serviceChannel = NotificationChannel(
-                CHANNEL_ID,
-                "Camera Service Channel",
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
-            getSystemService(NotificationManager::class.java).createNotificationChannel(serviceChannel)
-        }
     }
 
     private fun createNotification(): Notification {
@@ -61,6 +45,18 @@ class MainService : Service() {
             .build()
     }
 
+    private fun createNotificationChannel() {
+        Log.d("tag_lc", "------- createNotificationChannel")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val serviceChannel = NotificationChannel(
+                CHANNEL_ID,
+                "Camera Service Channel",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
+            getSystemService(NotificationManager::class.java).createNotificationChannel(serviceChannel)
+        }
+    }
+
     private fun setupImageAnalysis() {
         Log.d("tag_lc", "------- setupImageAnalysis ------------")
         imageAnalysis = ImageAnalysis.Builder()
@@ -71,15 +67,23 @@ class MainService : Service() {
         imageAnalysis?.let {
             it.setAnalyzer(cameraExecutor, analyzer)
         }
+//        imageAnalysis.setAnalyzer(cameraExecutor, analyzer)
     }
-
-    private fun startCamera() {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-        cameraProviderFuture.addListener({
-            cameraProvider = cameraProviderFuture.get()
-        }, ContextCompat.getMainExecutor(this))
-    }
-
+//    private fun setupImageAnalysis() {
+//        Log.d("tag_lc", "------- setupImageAnalysis ------------")
+//        imageAnalysis = ImageAnalysis.Builder()
+//            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+//            .build()
+//
+//        val analyzer = imageAnalyzer()
+//        imageAnalysis.setAnalyzer(cameraExecutor, analyzer)
+//        startAnalysis()
+//    }
+//    private fun startAnalysis() {
+//        imageAnalysis?.let {
+//            it.setAnalyzer(cameraExecutor, imageAnalyzer())
+//        }
+//    }
 
     inner class imageAnalyzer : ImageAnalysis.Analyzer {
         override fun analyze(image: ImageProxy) {
@@ -97,12 +101,13 @@ class MainService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d("tag_lc", "------- override fun onDestroy ------------")
         cameraExecutor.shutdown()
     }
 
     override fun onStartCommand(intent: Intent, flags: Int, startId: Int): Int {
-        Log.d("tag_lc", "------- MainService onStartCommand ------------")
+        Log.d("tag_lc", "------- onStartCommand ------------")
+        startForeground(NOTIFICATION_ID, createNotification())
+        setupImageAnalysis()
         return START_STICKY
     }
 

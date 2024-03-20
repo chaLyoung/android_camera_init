@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "com.aisct.android_camera"
-        minSdk = 21
+        minSdk = 26
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -44,6 +44,7 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("io.github.ParkSangGwon:tedpermission-normal:3.3.0")
+    implementation("androidx.work:work-runtime-ktx:2.7.1")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")

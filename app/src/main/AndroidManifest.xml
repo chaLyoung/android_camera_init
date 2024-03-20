@@ -3,19 +3,24 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="com.aisct.android_camera">
 
+    <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+<!--    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />-->
+<!--    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />-->
+<!--    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />-->
+    <!--     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/> -->
+<!--    <protected-broadcast android:name="com.motorola.motocare.INTENT_TRIGGER" />-->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" /> <!-- <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/> -->
+        android:maxSdkVersion="34" />
     <uses-feature
         android:name="android.hardware.camera.any"
         android:required="true" />
-
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -28,10 +33,11 @@
         android:theme="@style/Theme.Android_camera"
         tools:targetApi="31">
         <service
-            android:name=".MainService"
+            android:name=".CamService"
             android:foregroundServiceType="camera"
             android:enabled="true"
-            android:exported="false"></service>
+            android:exported="false"
+            tools:ignore="ForegroundServicePermission"></service>
 
         <activity
             android:name=".MainActivity"

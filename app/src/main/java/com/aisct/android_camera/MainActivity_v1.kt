@@ -38,7 +38,7 @@ import androidx.camera.video.VideoRecordEvent
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.aisct.android_camera.databinding.ActivityMainBinding
+import com.aisct.android_camera.databinding.ActivityMainOldBinding
 import com.gun0912.tedpermission.PermissionListener
 import com.gun0912.tedpermission.normal.TedPermission
 import java.text.SimpleDateFormat
@@ -46,8 +46,8 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class MainActivity_v1 : AppCompatActivity() {
-    private val mainBinding: ActivityMainBinding by lazy {
-        ActivityMainBinding.inflate(layoutInflater)
+    private val mainBinding: ActivityMainOldBinding by lazy {
+        ActivityMainOldBinding.inflate(layoutInflater)
     }
 
     private val multiplePermissionId = 14
@@ -104,7 +104,8 @@ class MainActivity_v1 : AppCompatActivity() {
         }
 
         mainBinding.captureIB.setOnClickListener {
-//            val serviceIntent = Intent(this@MainActivity, MyService::class.java)
+//            val service
+            //            = Intent(this@MainActivity, MyService::class.java)
 //            startService(serviceIntent)
 //            Toast.makeText(this@MainActivity, "Service start", Toast.LENGTH_SHORT).show()
             captureVideo()

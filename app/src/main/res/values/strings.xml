@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">android_camera</string>
+    <string name="err_no_cam_permission">App requires camera permission to work!</string>
 </resources>
