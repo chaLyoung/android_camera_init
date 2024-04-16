@@ -22,6 +22,7 @@ import android.media.ImageReader
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.media.MediaMuxer
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -40,7 +41,9 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import java.io.IOException
+import java.nio.ByteBuffer
 import kotlin.math.absoluteValue
+import java.util.concurrent.atomic.AtomicBoolean
 
 class CamService : Service() {
     // UI
@@ -52,14 +55,15 @@ class CamService : Service() {
     private var cameraManager: CameraManager? = null
     private var previewSize: Size? = null
     private var cameraDevice: CameraDevice? = null
-    private var captureRequest: CaptureRequest? = null
     private var captureSession: CameraCaptureSession? = null
+
     private var imageReader: ImageReader? = null
     private var isOpened = false
 
     private lateinit var webSocket: WebSocket
-
-    private var mediaCodec: MediaCodec? = null
+    private lateinit var surface: Surface
+    private lateinit var mediaCodec: MediaCodec
+    private lateinit var mediaMuxer: MediaMuxer
     // You can start service in 2 modes - 1.) with preview 2.) without preview (only bg processing)
     private var shouldShowPreview = true
 
@@ -77,65 +81,105 @@ class CamService : Service() {
     }
 
     private fun initWebSocket() {
-            val client = OkHttpClient()
-            val request = Request.Builder().url("ws://192.168.100.17:9999/ws/image").build()
-            val wsListener = object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
-                    // 연결 성공 시, 로그 출력
-                    Log.d("tag_lc", "WebSocket connection opened")
-                    isOpened = true
-                }
-                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                    // 서버로부터 연결 종료 요청 시, 로그 출력
-                    Log.d("tag_lc", "WebSocket connection closing!!!!!!!!!!!!!!! : $reason")
-                    isOpened = false
-                }
-                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    // 연결 종료 시, 로그 출력
-                    Log.d("tag_lc", "WebSocket connection closed!!!!!!!!!!!!!!!!!!!!! : $reason")
-                    isOpened = false
-                    Log.d("tag_lc", "WebSocket connection failed" + webSocket.toString())
-                    initWebSocket()
-                }
-                override fun onFailure(
-                    webSocket: WebSocket,
-                    t: Throwable,
-                    response: okhttp3.Response?
-                ) {
-                    Log.d("tag_lc", "WebSocket connection failed", t)
-                    isOpened = false
-                    initWebSocket()
-                }
+        val client = OkHttpClient()
+        val request = Request.Builder().url("ws://192.168.100.17:9999/ws/image").build()
+        val wsListener = object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
+                // 연결 성공 시, 로그 출력
+                Log.d("tag_lc", "WebSocket connection opened")
+                isOpened = true
             }
-            webSocket = client.newWebSocket(request, wsListener)
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                // 서버로부터 연결 종료 요청 시, 로그 출력
+                Log.d("tag_lc", "WebSocket connection closing!!!!!!!!!!!!!!! : $reason")
+                isOpened = false
+            }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                // 연결 종료 시, 로그 출력
+                Log.d("tag_lc", "WebSocket connection closed!!!!!!!!!!!!!!!!!!!!! : $reason")
+                isOpened = false
+                Log.d("tag_lc", "WebSocket connection failed" + webSocket.toString())
+                initWebSocket()
+            }
+            override fun onFailure(
+                webSocket: WebSocket,
+                t: Throwable,
+                response: okhttp3.Response?
+            ) {
+                Log.d("tag_lc", "WebSocket connection failed", t)
+                isOpened = false
+                initWebSocket()
+            }
         }
+//        client.dispatcher.executorService.shutdown()
+        webSocket = client.newWebSocket(request, wsListener)
+    }
 
+    private fun initMediaCodec() {
+        try {
+//            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, IMAGE_WIDTH, IMAGE_HEIGHT)x
+            val mediaFormat = MediaFormat.createVideoFormat(IMAGE_MIME_TYPE, IMAGE_WIDTH, IMAGE_HEIGHT)
+            mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+            mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, VIDEO_BITRATE)
+            mediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
+            mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
 
-    private val imageListener = ImageReader.OnImageAvailableListener { reader ->
-        val image = reader?.acquireLatestImage()
-        if(image != null) {
-            val buffer = image?.planes?.first()?.buffer
-            val bytes = ByteArray(buffer!!.capacity())
-            buffer.get(bytes)
-            image?.close()
-            encodeFrame(bytes)
+            mediaCodec = MediaCodec.createEncoderByType(IMAGE_MIME_TYPE)
+            mediaCodec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            surface = mediaCodec.createInputSurface()
+            mediaCodec.start()
+            createCaptureSession()
+        } catch (e: IOException) {
+            e.printStackTrace()
         }
     }
 
-//    private fun sendImageToServer(imageData: ByteArray) {
-//        val byteString = ByteString.of(*imageData)
-//        if(webSocket != null && isOpened)
-//            Log.d("tag_lc", "WebSocket connection sendImageToServer : " + isOpened.toString())
-//            webSocket.send(byteString)
-//    }
+    private fun createCaptureSession() {
+        Log.d("tag_lc", "CamService - private fun createCaptureSession()")
+        try {
+            val targetSurfaces = listOf(surface)
+            cameraDevice?.createCaptureSession(targetSurfaces, object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    captureSession = session
+                    val captureRequest = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                        addTarget(surface)
+                        set(CaptureRequest.JPEG_ORIENTATION, 90)
+                        set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                    }
+                    Log.d("tag_lc", "CamService - CameraCaptureSession.StateCallback()")
+                    session.setRepeatingRequest(captureRequest.build(), captureCallback, null)
+//                    handler!!.post { sendVideoData() }
+                }
 
-    private fun encodeFrame(data: ByteArray) {
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    Log.d("tag_lc", session.toString())
+                }
+            }, null)
+        } catch (e: CameraAccessException) {
+            Log.d("tag_lc", e.toString())
+        }
+    }
+
+    private fun sendVideoData() {
+        val bufferInfo = MediaCodec.BufferInfo()
+        while (true) {
+            val outputBufferIndex = mediaCodec.dequeueOutputBuffer(bufferInfo, 10000)
+            if (outputBufferIndex >= 0) {
+                val outputBuffer = mediaCodec.getOutputBuffer(outputBufferIndex)
+                val data = ByteArray(bufferInfo.size)
+                outputBuffer?.get(data)
+                Log.d("tag_lc", "----------------------- send -----------------")
+//                webSocket.send(ByteString.of(*data))
+                mediaCodec.releaseOutputBuffer(outputBufferIndex, false)
+            }
+        }
     }
 
     private val stateCallback = object : CameraDevice.StateCallback() {
         override fun onOpened(currentCameraDevice: CameraDevice) {
             cameraDevice = currentCameraDevice
-            createCaptureSession()
+            initMediaCodec()
         }
         override fun onDisconnected(currentCameraDevice: CameraDevice) {
             currentCameraDevice.close()
@@ -170,11 +214,19 @@ class CamService : Service() {
         startForeground()
     }
 
+    private fun start() {
+        shouldShowPreview = false
+        initWebSocket()
+        initCamera(1920, 1080)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         try {
-            mediaCodec?.stop()
-            mediaCodec?.release()
+            mediaCodec.stop()
+            mediaCodec.release()
+            mediaMuxer.stop()
+            mediaMuxer.release()
             stopCamera()
         } catch (e: Exception) {
             Log.e("tag_lc", "CamService - Error on onDestroy", e)
@@ -184,14 +236,7 @@ class CamService : Service() {
         sendBroadcast(Intent(ACTION_STOPPED))
     }
 
-    private fun start() {
-        shouldShowPreview = false
-        initWebSocket()
-        initMediaCodec()
-        initCam(1920, 1080)
-    }
-
-    private fun initCam(width: Int, height: Int) {
+    private fun initCamera(width: Int, height: Int) {
         cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
         var camId: String? = null
         for (id in cameraManager!!.cameraIdList) {
@@ -207,23 +252,6 @@ class CamService : Service() {
             cameraManager!!.openCamera(camId, stateCallback, null)
         } catch (e:SecurityException) {
             Log.d("tag_lc", "SecurityException" + e.toString())
-        }
-    }
-
-    private fun initMediaCodec() {
-        try {
-            val format = MediaFormat.createVideoFormat(VIDEO_MIME_TYPE, VIDEO_WIDTH, VIDEO_HEIGHT)
-            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            format.setInteger(MediaFormat.KEY_BIT_RATE, VIDEO_BIT_RATE)
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, VIDEO_FRAME_RATE)
-            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, VIDEO_I_FRAME_INTERVAL)
-
-            mediaCodec = MediaCodec.createEncoderByType(VIDEO_MIME_TYPE)
-            mediaCodec!!.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            mediaCodec!!.createInputSurface()
-            mediaCodec!!.start()
-        } catch (e: IOException) {
-            Log.d("tag_lc", "Error initializing MediaCodec", e)
         }
     }
 
@@ -252,57 +280,6 @@ class CamService : Service() {
 //        if (nearestToFurthestSz.isNotEmpty())
 //            return nearestToFurthestSz[0]
         return Size(1920, 1080)
-    }
-
-    private fun createCaptureSession() {
-        Log.d("tag_lc", "CamService - private fun createCaptureSession()")
-        try {
-            // Prepare surfaces we want to use in capture session
-            val targetSurfaces = ArrayList<Surface>()
-            // Prepare CaptureRequest that can be used with CameraCaptureSession
-            val requestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                imageReader = ImageReader.newInstance(
-                    previewSize!!.getWidth(), previewSize!!.getHeight(),
-                    ImageFormat.JPEG, 2
-//                    ImageFormat.YUV_420_888, 2
-                )
-                imageReader!!.setOnImageAvailableListener(imageListener, null)
-                targetSurfaces.add(imageReader!!.surface)
-                addTarget(imageReader!!.surface)
-                set(CaptureRequest.JPEG_ORIENTATION, 90)
-                Log.d("tag_lc", "CamService - imageReader")
-                // Set some additional parameters for the request
-                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
-            }
-
-            // Prepare CameraCaptureSession
-            cameraDevice!!.createCaptureSession(targetSurfaces,
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(cameraCaptureSession: CameraCaptureSession) {
-                        // The camera is already closed
-                        if (null == cameraDevice) {
-                            return
-                        }
-                        captureSession = cameraCaptureSession
-                        try {
-                            // Now we can start capturing
-                            Log.d("tag_lc", "CamService - CameraCaptureSession.StateCallback()")
-                            captureRequest = requestBuilder!!.build()
-                            captureSession!!.setRepeatingRequest(captureRequest!!, captureCallback, null)
-
-                        } catch (e: CameraAccessException) {
-                            Log.e(TAG, "createCaptureSession", e)
-                        }
-                    }
-                    override fun onConfigureFailed(cameraCaptureSession: CameraCaptureSession) {
-                        Log.e(TAG, "createCaptureSession()")
-                    }
-                }, null
-            )
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "createCaptureSession", e)
-        }
     }
 
     private fun stopCamera() {
@@ -359,13 +336,13 @@ class CamService : Service() {
         val CHANNEL_NAME = "cam_service_channel_name"
 
         private const val SERVER_URL = "ws://your_websocket_server_url"
-        private const val PREVIEW_WIDTH = 1920
-        private const val PREVIEW_HEIGHT = 1080
-        private const val VIDEO_MIME_TYPE = "video/avc"
-        private const val VIDEO_WIDTH = 1920
-        private const val VIDEO_HEIGHT = 1080
-        private const val VIDEO_BIT_RATE = 3 * 1024 * 1024 // 3 Mbps
-        private const val VIDEO_FRAME_RATE = 30
-        private const val VIDEO_I_FRAME_INTERVAL = 2
+        private const val IMAGE_MIME_TYPE = "video/avc"
+        private const val IMAGE_WIDTH = 1920
+        private const val IMAGE_HEIGHT = 1080
+        private const val BUFFER_SIZE = 3
+        private const val IMAGE_BIT_RATE = 3 * 1024 * 1024 // 3 Mbps
+        private const val VIDEO_BITRATE = 2000000
+        private const val FRAME_RATE = 30
+        private const val I_FRAME_INTERVAL = 1
     }
 }

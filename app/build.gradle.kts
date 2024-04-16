@@ -40,7 +40,7 @@ android {
 
 
 dependencies {
-    implementation(project(":library"))
+//    implementation(project(":library"))
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
@@ -67,6 +67,7 @@ dependencies {
     implementation("androidx.camera:camera-view:${camerax_version}")
     implementation("androidx.camera:camera-extensions:${camerax_version}")
 
-    implementation("com.github.pedroSG94.RootEncoder:library:2.4.4")
-//    implementation("com.github.pedroSG94.rtsp:librtsp:4.5.3")
+//    implementation("com.github.pedroSG94:rtmp-rtsp-stream-client-java:4.4.0")
+    implementation("com.github.pedroSG94.rtmp-rtsp-stream-client-java:rtplibrary:1.2.8")
+//    implementation("com.github.pedroSG94.RootEncoder:library:2.4.4")
 }

@@ -67,6 +67,11 @@ class MainActivity : AppCompatActivity() {
         unregisterReceiver(receiver)
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        notifyService(CamService.ACTION_STOP)
+    }
+
     private fun initView() {
         Log.d("tag_lc", "private fun initView()")
         with(DisplayMetrics()){
