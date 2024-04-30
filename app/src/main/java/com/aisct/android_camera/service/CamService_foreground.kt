@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
-import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
@@ -39,11 +38,9 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import okio.ByteString
 import java.io.IOException
-import java.nio.ByteBuffer
 import kotlin.math.absoluteValue
-import java.util.concurrent.atomic.AtomicBoolean
+
 
 class CamService_foreground : Service() {
     // UI

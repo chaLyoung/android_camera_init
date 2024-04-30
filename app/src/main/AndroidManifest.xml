@@ -33,7 +33,7 @@
         android:theme="@style/Theme.Android_camera"
         tools:targetApi="31">
         <service
-            android:name=".service.CamService"
+            android:name=".service.CamService_audio"
             android:foregroundServiceType="camera"
             android:enabled="true"
             android:exported="false"

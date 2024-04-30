@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.BatteryManager
 import android.os.Bundle
 import android.util.DisplayMetrics
 import android.util.Log
@@ -15,12 +16,22 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.view.PreviewView
 import com.aisct.android_camera.databinding.ActivityMainBinding
-import com.aisct.android_camera.service.CamService
+import com.aisct.android_camera.service.CamService_audio as CamService
 import com.aisct.android_camera.util.isServiceRunning
 
+class BatteryLevelReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val level: Int = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale: Int = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        val batteryPct: Float = level / scale.toFloat() * 100f
+
+        Log.d("BatteryLevel", "Current Battery Level: $batteryPct%")
+    }
+}
 
 class MainActivity : AppCompatActivity() {
     private lateinit var activityResultLauncher: ActivityResultLauncher<Intent>
+    private lateinit var batteryLevelReceiver: BatteryLevelReceiver
     private lateinit var previewView: PreviewView
     private val mainBinding: ActivityMainBinding by lazy {
         ActivityMainBinding.inflate(layoutInflater)
@@ -53,6 +64,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
         initView()
+        batteryLevelReceiver = BatteryLevelReceiver()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        Log.d("tag_lc", "MainActivity - override fun onStart()")
+        registerReceiver(batteryLevelReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
     }
 
     override fun onResume() {
@@ -62,16 +80,22 @@ class MainActivity : AppCompatActivity() {
         flipButtonVisibility(running)
     }
 
+    override fun onStop() {
+        super.onStop()
+        unregisterReceiver(batteryLevelReceiver)
+    }
+
     override fun onPause() {
         super.onPause()
+        Log.d("tag_lc", "MainActivity - override fun onPause()")
         unregisterReceiver(receiver)
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        Log.d("tag_lc", "MainActivity onDestroy()")
-        notifyService(CamService.ACTION_STOP)
-    }
+//    override fun onDestroy() {
+//        super.onDestroy()
+//        Log.d("tag_lc", "MainActivity onDestroy()")
+//        notifyService(CamService.ACTION_STOP)
+//    }
 
     private fun initView() {
         Log.d("tag_lc", "private fun initView()")

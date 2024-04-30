@@ -1,4 +1,4 @@
-package com.aisct.android_camera.service
+package com.aisct.android_camera.service//package com.aisct.android_camera
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -39,13 +39,10 @@ import okhttp3.Request
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
-import okio.ByteString.Companion.toByteString
-import java.io.File
 import java.io.IOException
-import java.nio.ByteBuffer
 import kotlin.math.absoluteValue
 
-class CamService : Service() {
+class CamService_audio : Service() {
     // UI
     private var wm: WindowManager? = null
     private var rootView: View? = null
@@ -62,13 +59,8 @@ class CamService : Service() {
 
     private lateinit var webSocket: WebSocket
     private lateinit var surface: Surface
-    private lateinit var videoEncoder: MediaCodec
-    private lateinit var audioEncoder: MediaCodec
-    private lateinit var mediaMuxer: MediaMuxer
-    private var muxerStarted = false
-    private var videoTrackIndex = -1
-    private var audioTrackIndex = -1
-    private var tempFile: File? = null
+    private lateinit var mediaCodec: MediaCodec
+//    private lateinit var mediaMuxer: MediaMuxer
     // You can start service in 2 modes - 1.) with preview 2.) without preview (only bg processing)
     private var shouldShowPreview = true
 
@@ -84,9 +76,7 @@ class CamService : Service() {
             session: CameraCaptureSession,
             request: CaptureRequest,
             result: TotalCaptureResult
-        ) {
-            Log.d("tag_lc", "onCaptureCompleted!!")
-        }
+        ) {}
     }
 
     private fun initWebSocket() {
@@ -125,67 +115,40 @@ class CamService : Service() {
         webSocket = client.newWebSocket(request, wsListener)
     }
 
-    private fun initVideoCodec(): MediaCodec {
-//            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, IMAGE_WIDTH, IMAGE_HEIGHT)
-        val mediaFormat = MediaFormat.createVideoFormat(IMAGE_MIME_TYPE, IMAGE_WIDTH, IMAGE_HEIGHT)
-        mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
-        mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, VIDEO_BITRATE)
-        mediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
-        mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
+    private fun initMediaCodec() {
+        try {
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, IMAGE_WIDTH, IMAGE_HEIGHT)
+            val mediaFormat = MediaFormat.createVideoFormat(IMAGE_MIME_TYPE, IMAGE_WIDTH, IMAGE_HEIGHT)
+            mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+            mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, VIDEO_BITRATE)
+            mediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
+            mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
 
-        return MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
-            configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            start()
-        }
-    }
-    private fun initAudioCodec(): MediaCodec {
-        val mediaFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, 44100, 2)
-        mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, AUDIO_BITRATE)
-
-        return MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC).apply {
-            configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            start()
-        }
-    }
-
-
-    private fun sendVideoData() {
-        val bufferInfo = MediaCodec.BufferInfo()
-        if(isOpened) {
-            val outputBufferIndex = videoEncoder.dequeueOutputBuffer(bufferInfo, 10000)
-            if (outputBufferIndex >= 0) {
-                val outputBuffer = videoEncoder.getOutputBuffer(outputBufferIndex)
-                val data = ByteArray(bufferInfo.size)
-                outputBuffer?.get(data)
-                webSocket.send(ByteString.of(*data))
-                videoEncoder.releaseOutputBuffer(outputBufferIndex, false)
-            }
-        } else {
-            Log.d("tag_lc", "----------------------- send is not opened -----------------")
+            mediaCodec = MediaCodec.createEncoderByType(IMAGE_MIME_TYPE)
+            mediaCodec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            surface = mediaCodec.createInputSurface()
+            mediaCodec.start()
+            createCaptureSession()
+        } catch (e: IOException) {
+            e.printStackTrace()
         }
     }
 
     private fun createCaptureSession() {
         Log.d("tag_lc", "CamService - private fun createCaptureSession()")
         try {
-//            val targetSurfaces = listOf(surface)
-            videoEncoder = initVideoCodec()
-            audioEncoder = initAudioCodec()
-            val targetSurfaces = listOf(videoEncoder.createInputSurface(), audioEncoder.createInputSurface())
+            val targetSurfaces = listOf(surface)
             cameraDevice?.createCaptureSession(targetSurfaces, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
                     val captureRequest = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-//                        addTarget(surface)
-                        addTarget(videoEncoder.createInputSurface())
-                        addTarget(audioEncoder.createInputSurface())
+                        addTarget(surface)
                         set(CaptureRequest.JPEG_ORIENTATION, 90)
                         set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                         set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
                     }
                     Log.d("tag_lc", "CamService - CameraCaptureSession.StateCallback()")
                     session.setRepeatingRequest(captureRequest.build(), captureCallback, null)
-//                    startEncodingAndSending()
                 }
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -197,72 +160,20 @@ class CamService : Service() {
         }
     }
 
-//    private fun startEncodingAndSending() {
-//        Thread(Runnable {
-//            drainEncoder(videoEncoder, "video")
-//            drainEncoder(audioEncoder, "audio")
-//        }).start()
-//    }
-
-    private val stateCallback = object : CameraDevice.StateCallback() {
-        override fun onOpened(currentCameraDevice: CameraDevice) {
-            cameraDevice = currentCameraDevice
-//            startRecordingAndStreaming()
-            createCaptureSession()
-        }
-        override fun onDisconnected(currentCameraDevice: CameraDevice) {
-            currentCameraDevice.close()
-            cameraDevice = null
-        }
-        override fun onError(currentCameraDevice: CameraDevice, error: Int) {
-            currentCameraDevice.close()
-            cameraDevice = null
-        }
-    }
-
-    override fun onBind(p0: Intent?): IBinder? {
-        Log.d("tag_lc", "CamService - override fun onBind")
-        return null
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when(intent?.action) {
-            ACTION_START -> start()
-            ACTION_STOP -> {
-                stopSelf()
+    private fun sendVideoData() {
+        val bufferInfo = MediaCodec.BufferInfo()
+        if(isOpened) {
+            val outputBufferIndex = mediaCodec.dequeueOutputBuffer(bufferInfo, 10000)
+            if (outputBufferIndex >= 0) {
+                val outputBuffer = mediaCodec.getOutputBuffer(outputBufferIndex)
+                val data = ByteArray(bufferInfo.size)
+                outputBuffer?.get(data)
+                webSocket.send(ByteString.of(*data))
+                mediaCodec.releaseOutputBuffer(outputBufferIndex, false)
             }
+        } else {
+            Log.d("tag_lc", "----------------------- send is not opened -----------------")
         }
-        return super.onStartCommand(intent, flags, startId)
-    }
-
-    override fun onCreate() {
-        super.onCreate()
-        val inflater = LayoutInflater.from(this)
-        mainBinding = ActivityMainBinding.inflate(inflater, null, false)
-        sendBroadcast(Intent(ACTION_START))
-        startForeground()
-    }
-
-    private fun start() {
-        shouldShowPreview = false
-        initWebSocket()
-        initCamera(1920, 1080)
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        try {
-            videoEncoder.stop()
-            videoEncoder.release()
-            audioEncoder.stop()
-            audioEncoder.release()
-            stopCamera()
-        } catch (e: Exception) {
-            Log.e("tag_lc", "CamService - Error on onDestroy", e)
-        }
-        if (rootView != null)
-            wm?.removeView(rootView)
-        sendBroadcast(Intent(ACTION_STOPPED))
     }
 
     private fun initCamera(width: Int, height: Int) {
@@ -309,6 +220,64 @@ class CamService : Service() {
 //        if (nearestToFurthestSz.isNotEmpty())
 //            return nearestToFurthestSz[0]
         return Size(1920, 1080)
+    }
+
+    private val stateCallback = object : CameraDevice.StateCallback() {
+        override fun onOpened(currentCameraDevice: CameraDevice) {
+            cameraDevice = currentCameraDevice
+            initMediaCodec()
+        }
+        override fun onDisconnected(currentCameraDevice: CameraDevice) {
+            currentCameraDevice.close()
+            cameraDevice = null
+        }
+        override fun onError(currentCameraDevice: CameraDevice, error: Int) {
+            currentCameraDevice.close()
+            cameraDevice = null
+        }
+    }
+
+    override fun onBind(p0: Intent?): IBinder? {
+        Log.d("tag_lc", "CamService - override fun onBind")
+        return null
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when(intent?.action) {
+            ACTION_START -> start()
+            ACTION_STOP -> {
+                stopSelf()
+            }
+        }
+        return super.onStartCommand(intent, flags, startId)
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        val inflater = LayoutInflater.from(this)
+        mainBinding = ActivityMainBinding.inflate(inflater, null, false)
+        sendBroadcast(Intent(ACTION_START))
+        startForeground()
+    }
+
+    private fun start() {
+        shouldShowPreview = false
+        initWebSocket()
+        initCamera(1920, 1080)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            mediaCodec.stop()
+            mediaCodec.release()
+            stopCamera()
+        } catch (e: Exception) {
+            Log.e("tag_lc", "CamService - Error on onDestroy", e)
+        }
+        if (rootView != null)
+            wm?.removeView(rootView)
+        sendBroadcast(Intent(ACTION_STOPPED))
     }
 
     private fun stopCamera() {
@@ -370,8 +339,7 @@ class CamService : Service() {
         private const val IMAGE_HEIGHT = 1080
         private const val BUFFER_SIZE = 3
         private const val IMAGE_BIT_RATE = 3 * 1024 * 1024 // 3 Mbps
-        private const val VIDEO_BITRATE = 2000000
-        private const val AUDIO_BITRATE = 128000
+        private const val VIDEO_BITRATE = 5000000
         private const val FRAME_RATE = 30
         private const val I_FRAME_INTERVAL = 1
     }
