@@ -16,7 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.view.PreviewView
 import com.aisct.android_camera.databinding.ActivityMainBinding
-import com.aisct.android_camera.service.CamService_audio as CamService
+import com.aisct.android_camera.service.CamService as CamService
 import com.aisct.android_camera.util.isServiceRunning
 
 class BatteryLevelReceiver : BroadcastReceiver() {

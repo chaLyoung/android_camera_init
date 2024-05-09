@@ -22,6 +22,7 @@ import android.media.ImageReader
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.media.projection.MediaProjection
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -42,7 +43,7 @@ import okio.ByteString
 import java.io.IOException
 import kotlin.math.absoluteValue
 
-class CamService : Service() {
+class CamService_new : Service() {
     // UI
     private var wm: WindowManager? = null
     private var rootView: View? = null
@@ -57,6 +58,7 @@ class CamService : Service() {
     private var imageReader: ImageReader? = null
     private var isOpened = false
 
+    private lateinit var mediaProjection: MediaProjection
     private lateinit var webSocket: WebSocket
     private lateinit var surface: Surface
     private lateinit var mediaCodec: MediaCodec

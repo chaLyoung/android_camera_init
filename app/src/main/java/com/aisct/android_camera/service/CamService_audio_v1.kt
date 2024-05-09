@@ -21,7 +21,6 @@ import android.media.ImageReader
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
-import android.media.MediaMuxer
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -38,11 +37,11 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 import java.io.IOException
 import kotlin.math.absoluteValue
 
-
-class CamService_foreground : Service() {
+class CamService_audio_v1 : Service() {
     // UI
     private var wm: WindowManager? = null
     private var rootView: View? = null
@@ -60,7 +59,7 @@ class CamService_foreground : Service() {
     private lateinit var webSocket: WebSocket
     private lateinit var surface: Surface
     private lateinit var mediaCodec: MediaCodec
-    private lateinit var mediaMuxer: MediaMuxer
+//    private lateinit var mediaMuxer: MediaMuxer
     // You can start service in 2 modes - 1.) with preview 2.) without preview (only bg processing)
     private var shouldShowPreview = true
 
@@ -69,7 +68,9 @@ class CamService_foreground : Service() {
             session: CameraCaptureSession,
             request: CaptureRequest,
             partialResult: CaptureResult
-        ) {}
+        ) {
+            sendVideoData()
+        }
         override fun onCaptureCompleted(
             session: CameraCaptureSession,
             request: CaptureRequest,
@@ -79,7 +80,8 @@ class CamService_foreground : Service() {
 
     private fun initWebSocket() {
         val client = OkHttpClient()
-        val request = Request.Builder().url("ws://192.168.100.17:9999/ws/image").build()
+//        val request = Request.Builder().url("ws://192.168.100.17:9999/ws/image").build()
+        val request = Request.Builder().url("ws://192.168.1.41:9999/ws/image").build()
         val wsListener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
                 // 연결 성공 시, 로그 출력
@@ -105,7 +107,7 @@ class CamService_foreground : Service() {
             ) {
                 Log.d("tag_lc", "WebSocket connection failed", t)
                 isOpened = false
-                initWebSocket()
+//                initWebSocket()
             }
         }
 //        client.dispatcher.executorService.shutdown()
@@ -114,7 +116,7 @@ class CamService_foreground : Service() {
 
     private fun initMediaCodec() {
         try {
-//            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, IMAGE_WIDTH, IMAGE_HEIGHT)x
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, IMAGE_WIDTH, IMAGE_HEIGHT)
             val mediaFormat = MediaFormat.createVideoFormat(IMAGE_MIME_TYPE, IMAGE_WIDTH, IMAGE_HEIGHT)
             mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
             mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, VIDEO_BITRATE)
@@ -146,7 +148,6 @@ class CamService_foreground : Service() {
                     }
                     Log.d("tag_lc", "CamService - CameraCaptureSession.StateCallback()")
                     session.setRepeatingRequest(captureRequest.build(), captureCallback, null)
-//                    handler!!.post { sendVideoData() }
                 }
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -160,17 +161,64 @@ class CamService_foreground : Service() {
 
     private fun sendVideoData() {
         val bufferInfo = MediaCodec.BufferInfo()
-        while (true) {
+        if(isOpened) {
             val outputBufferIndex = mediaCodec.dequeueOutputBuffer(bufferInfo, 10000)
             if (outputBufferIndex >= 0) {
                 val outputBuffer = mediaCodec.getOutputBuffer(outputBufferIndex)
                 val data = ByteArray(bufferInfo.size)
                 outputBuffer?.get(data)
-                Log.d("tag_lc", "----------------------- send -----------------")
-//                webSocket.send(ByteString.of(*data))
+                webSocket.send(ByteString.of(*data))
                 mediaCodec.releaseOutputBuffer(outputBufferIndex, false)
             }
+        } else {
+            Log.d("tag_lc", "----------------------- send is not opened -----------------")
         }
+    }
+
+    private fun initCamera(width: Int, height: Int) {
+        cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        var camId: String? = null
+        for (id in cameraManager!!.cameraIdList) {
+            val characteristics = cameraManager!!.getCameraCharacteristics(id)
+            val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
+            if (facing == CameraCharacteristics.LENS_FACING_BACK) {
+                camId = id
+                break
+            }
+        }
+        previewSize = chooseSupportedSize(camId!!, width, height)
+        try {
+            cameraManager!!.openCamera(camId, stateCallback, null)
+        } catch (e:SecurityException) {
+            Log.d("tag_lc", "SecurityException" + e.toString())
+        }
+    }
+
+    private fun chooseSupportedSize(camId: String, textureViewWidth: Int, textureViewHeight: Int): Size {
+        val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        // Get all supported sizes for TextureView
+        val characteristics = manager.getCameraCharacteristics(camId)
+        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val supportedSizes = map!!.getOutputSizes(SurfaceTexture::class.java)
+        // We want to find something near the size of our TextureView
+        val texViewArea = textureViewWidth * textureViewHeight
+        val texViewAspect = textureViewWidth.toFloat()/textureViewHeight.toFloat()
+        val nearestToFurthestSz = supportedSizes.sortedWith(compareBy(
+            // First find something with similar aspect
+            {
+                val aspect = if (it.width < it.height) it.width.toFloat() / it.height.toFloat()
+                else it.height.toFloat()/it.width.toFloat()
+                (aspect - texViewAspect).absoluteValue
+            },
+            // Also try to get similar resolution
+            {
+                (texViewArea - it.width * it.height).absoluteValue
+            }
+        ))
+        Log.d("tag_lc", "CamService - " + nearestToFurthestSz.toString())
+//        if (nearestToFurthestSz.isNotEmpty())
+//            return nearestToFurthestSz[0]
+        return Size(1920, 1080)
     }
 
     private val stateCallback = object : CameraDevice.StateCallback() {
@@ -222,8 +270,6 @@ class CamService_foreground : Service() {
         try {
             mediaCodec.stop()
             mediaCodec.release()
-            mediaMuxer.stop()
-            mediaMuxer.release()
             stopCamera()
         } catch (e: Exception) {
             Log.e("tag_lc", "CamService - Error on onDestroy", e)
@@ -231,52 +277,6 @@ class CamService_foreground : Service() {
         if (rootView != null)
             wm?.removeView(rootView)
         sendBroadcast(Intent(ACTION_STOPPED))
-    }
-
-    private fun initCamera(width: Int, height: Int) {
-        cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        var camId: String? = null
-        for (id in cameraManager!!.cameraIdList) {
-            val characteristics = cameraManager!!.getCameraCharacteristics(id)
-            val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
-            if (facing == CameraCharacteristics.LENS_FACING_BACK) {
-                camId = id
-                break
-            }
-        }
-        previewSize = chooseSupportedSize(camId!!, width, height)
-        try {
-            cameraManager!!.openCamera(camId, stateCallback, null)
-        } catch (e:SecurityException) {
-            Log.d("tag_lc", "SecurityException" + e.toString())
-        }
-    }
-
-    private fun chooseSupportedSize(camId: String, textureViewWidth: Int, textureViewHeight: Int): Size {
-        val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        // Get all supported sizes for TextureView
-        val characteristics = manager.getCameraCharacteristics(camId)
-        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        val supportedSizes = map!!.getOutputSizes(SurfaceTexture::class.java)
-        // We want to find something near the size of our TextureView
-        val texViewArea = textureViewWidth * textureViewHeight
-        val texViewAspect = textureViewWidth.toFloat()/textureViewHeight.toFloat()
-        val nearestToFurthestSz = supportedSizes.sortedWith(compareBy(
-            // First find something with similar aspect
-            {
-                val aspect = if (it.width < it.height) it.width.toFloat() / it.height.toFloat()
-                else it.height.toFloat()/it.width.toFloat()
-                (aspect - texViewAspect).absoluteValue
-            },
-            // Also try to get similar resolution
-            {
-                (texViewArea - it.width * it.height).absoluteValue
-            }
-        ))
-        Log.d("tag_lc", "CamService - " + nearestToFurthestSz.toString())
-//        if (nearestToFurthestSz.isNotEmpty())
-//            return nearestToFurthestSz[0]
-        return Size(1920, 1080)
     }
 
     private fun stopCamera() {
@@ -338,7 +338,7 @@ class CamService_foreground : Service() {
         private const val IMAGE_HEIGHT = 1080
         private const val BUFFER_SIZE = 3
         private const val IMAGE_BIT_RATE = 3 * 1024 * 1024 // 3 Mbps
-        private const val VIDEO_BITRATE = 2000000
+        private const val VIDEO_BITRATE = 5000000
         private const val FRAME_RATE = 30
         private const val I_FRAME_INTERVAL = 1
     }
