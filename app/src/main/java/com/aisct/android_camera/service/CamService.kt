@@ -8,6 +8,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.ImageFormat
+import android.graphics.PixelFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
@@ -28,19 +30,27 @@ import android.util.Log
 import android.util.Size
 import android.view.LayoutInflater
 import android.view.Surface
+import android.view.TextureView
 import android.view.View
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.aisct.android_camera.MainActivity
 import com.aisct.android_camera.R
 import com.aisct.android_camera.databinding.ActivityMainBinding
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
-import okio.ByteString
+import com.aisct.android_camera.model.DataProcess
 import java.io.IOException
+import java.util.Collections
 import kotlin.math.absoluteValue
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
+import com.aisct.android_camera.network.WebSocketManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class CamService : Service() {
     // UI
@@ -50,18 +60,25 @@ class CamService : Service() {
 
     // Camera2-related stuff
     private var cameraManager: CameraManager? = null
-    private var previewSize: Size? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
-
+    private var textureView: TextureView? = null
+    private lateinit var webSocketManager: WebSocketManager
+    private lateinit var ortEnvironment: OrtEnvironment
+    private lateinit var session: OrtSession
     private var imageReader: ImageReader? = null
     private var isOpened = false
-
-    private lateinit var webSocket: WebSocket
+    private val dataProcess = DataProcess(context = this)
     private lateinit var surface: Surface
     private lateinit var mediaCodec: MediaCodec
-//    private lateinit var mediaMuxer: MediaMuxer
-    // You can start service in 2 modes - 1.) with preview 2.) without preview (only bg processing)
+    private val modelExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    // 코루틴 관련 변수 추가
+    private val job = Job()
+    private val coroutineScope = CoroutineScope(Dispatchers.IO + job)
+    var spsPpsSet = false
+    var sps: ByteArray? = null
+    var pps: ByteArray? = null
+
     private var shouldShowPreview = true
 
     private val cameraStateCallback = object : CameraDevice.StateCallback() {
@@ -95,42 +112,6 @@ class CamService : Service() {
         ) {}
     }
 
-    private fun initWebSocket() {
-        val client = OkHttpClient()
-        val request = Request.Builder().url("ws://192.168.100.17:9999/ws/image").build()
-//        val request = Request.Builder().url("ws://192.168.1.41:9999/ws/image").build()
-        val wsListener = object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
-                // 연결 성공 시, 로그 출력
-                Log.d("tag_lc", "WebSocket connection opened")
-                isOpened = true
-            }
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                // 서버로부터 연결 종료 요청 시, 로그 출력
-                Log.d("tag_lc", "WebSocket connection closing!!!!!!!!!!!!!!! : $reason")
-                isOpened = false
-            }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                // 연결 종료 시, 로그 출력
-                Log.d("tag_lc", "WebSocket connection closed!!!!!!!!!!!!!!!!!!!!! : $reason")
-                isOpened = false
-                Log.d("tag_lc", "WebSocket connection failed" + webSocket.toString())
-                initWebSocket()
-            }
-            override fun onFailure(
-                webSocket: WebSocket,
-                t: Throwable,
-                response: okhttp3.Response?
-            ) {
-                Log.d("tag_lc", "WebSocket connection failed : $t")
-                isOpened = false
-//                initWebSocket()
-            }
-        }
-//        client.dispatcher.executorService.shutdown()
-        webSocket = client.newWebSocket(request, wsListener)
-    }
-
     private fun initMediaCodec() {
         try {
             Log.d("tag_lc", "private fun initMediaCodec()")
@@ -140,7 +121,6 @@ class CamService : Service() {
             mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, VIDEO_BITRATE)
             mediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
             mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
-
             mediaCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             val capabilities = mediaCodec.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
             Log.d("tag_lc", "Color formats supported: ${capabilities.colorFormats.joinToString()}")
@@ -155,16 +135,57 @@ class CamService : Service() {
         }
     }
 
+    private val imageListener = ImageReader.OnImageAvailableListener { reader ->
+        val image = reader?.acquireLatestImage()
+        if (image != null) {
+            modelExecutor.execute {
+                try {
+                    // val yuvBytes = dataProcess.imageToNV21(image)
+                    val bitmap = dataProcess.imageToBitmap(image)
+                    val floatBuffer = dataProcess.bitmapToFloatBuffer(bitmap)
+                    val inputName = session.inputNames.iterator().next() // session 이름
+                    // 모델의 요구 입력값 [1 3 640 640] [배치 사이즈, 픽셀(RGB), 너비, 높이], 모델마다 크기는 다를 수 있음.
+                    val shape = longArrayOf(
+                        DataProcess.BATCH_SIZE.toLong(),
+                        DataProcess.PIXEL_SIZE.toLong(),
+                        DataProcess.INPUT_SIZE.toLong(),
+                        DataProcess.INPUT_SIZE.toLong()
+                    )
+                    val inputTensor = OnnxTensor.createTensor(ortEnvironment, floatBuffer, shape)
+                    val resultTensor = session.run(Collections.singletonMap(inputName, inputTensor))
+                    val outputs = resultTensor.get(0).value as Array<*> // [1 84 8400]
+                    val results = dataProcess.outputsToNPMSPredictions(outputs)
+                    Log.d("tag_lc", results.toString())
+                } catch (e: Exception) {
+                    Log.d("tag_lc", "Error processing image " + e.toString())
+                } finally {
+                    Log.d("tag_lc", "image.close()")
+                    image.close()
+                }
+            }
+            Log.d("tag_lc", "Got image: " + image?.width + " x " + image?.height)
+        }
+    }
+
     private fun createCaptureSession() {
         Log.d("tag_lc", "CamService - private fun createCaptureSession()")
         try {
-            val targetSurfaces = listOf(surface)
+            val targetSurfaces = ArrayList<Surface>()
+            imageReader = ImageReader.newInstance(
+                MODEL_IMAGE_WIDTH, MODEL_IMAGE_HEIGHT,
+                ImageFormat.YUV_420_888, 3
+            )
+            imageReader!!.setOnImageAvailableListener(imageListener, null)
+//            targetSurfaces.add(surface)
+            targetSurfaces.add(imageReader!!.surface)
             cameraDevice?.createCaptureSession(targetSurfaces, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
                     val captureRequest = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                        addTarget(surface)
-                        set(CaptureRequest.JPEG_ORIENTATION, 90)
+//                        addTarget(surface)
+//                        addTarget(previewSurface)
+                        addTarget(imageReader!!.surface)
+//                        set(CaptureRequest.JPEG_ORIENTATION, 0)
                         set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                         set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
                     }
@@ -191,8 +212,9 @@ class CamService : Service() {
                     val outputBuffer = mediaCodec.getOutputBuffer(outputBufferIndex)
                     val data = ByteArray(bufferInfo.size)
                     outputBuffer?.get(data)
-                    webSocket.send(ByteString.of(*data))
-                    mediaCodec.releaseOutputBuffer(outputBufferIndex, false)
+//                    webSocket.send(ByteString.of(*data))
+//                    webSocketManager.sendMessage(ByteString.of(*data))
+//                    mediaCodec.releaseOutputBuffer(outputBufferIndex, false)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -201,6 +223,16 @@ class CamService : Service() {
         } else {
 //            Log.d("tag_lc", "----------------------- send is not opened -----------------")
         }
+    }
+
+    private fun initModelSession() {
+        dataProcess.loadModel() // onnx 모델 불러오기
+        dataProcess.loadLabel() // coco txt 파일 불러오기
+        ortEnvironment = OrtEnvironment.getEnvironment()
+        session = ortEnvironment.createSession(
+            this.filesDir.absolutePath.toString() + "/" + DataProcess.FILE_NAME,
+            OrtSession.SessionOptions()
+        )
     }
 
     private fun initCamera(width: Int, height: Int) {
@@ -215,43 +247,11 @@ class CamService : Service() {
                 break
             }
         }
-        Log.d("tag_lc", "camId : " + camId.toString())
-        previewSize = chooseSupportedSize(camId!!, width, height)
         try {
-            cameraManager!!.openCamera(camId, cameraStateCallback, null)
+            cameraManager!!.openCamera(camId!!, cameraStateCallback, null)
         } catch (e:SecurityException) {
             Log.d("tag_lc", "SecurityException" + e.toString())
         }
-    }
-
-    private fun chooseSupportedSize(camId: String, textureViewWidth: Int, textureViewHeight: Int): Size {
-        val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        // Get all supported sizes for TextureView
-        val characteristics = manager.getCameraCharacteristics(camId)
-        val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
-        val isLogical = capabilities?.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)
-        Log.d("tag_lc", "Is Logical Multi Camera: $isLogical")
-        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        val supportedSizes = map!!.getOutputSizes(SurfaceTexture::class.java)
-        // We want to find something near the size of our TextureView
-        val texViewArea = textureViewWidth * textureViewHeight
-        val texViewAspect = textureViewWidth.toFloat()/textureViewHeight.toFloat()
-        val nearestToFurthestSz = supportedSizes.sortedWith(compareBy(
-            // First find something with similar aspect
-            {
-                val aspect = if (it.width < it.height) it.width.toFloat() / it.height.toFloat()
-                else it.height.toFloat()/it.width.toFloat()
-                (aspect - texViewAspect).absoluteValue
-            },
-            // Also try to get similar resolution
-            {
-                (texViewArea - it.width * it.height).absoluteValue
-            }
-        ))
-        Log.d("tag_lc", "CamService - " + nearestToFurthestSz.toString())
-//        if (nearestToFurthestSz.isNotEmpty())
-//            return nearestToFurthestSz[0]
-        return Size(1920, 1080)
     }
 
     override fun onBind(p0: Intent?): IBinder? {
@@ -279,7 +279,8 @@ class CamService : Service() {
 
     private fun start() {
         shouldShowPreview = false
-        initWebSocket()
+        initModelSession()
+        webSocketManager = WebSocketManager(SERVER_URL, this)
         initCamera(1920, 1080)
     }
 
@@ -288,6 +289,7 @@ class CamService : Service() {
         try {
             mediaCodec.stop()
             mediaCodec.release()
+            webSocketManager.closeConnection()
             stopCamera()
         } catch (e: Exception) {
             Log.e("tag_lc", "CamService - Error on onDestroy", e)
@@ -350,10 +352,12 @@ class CamService : Service() {
         val CHANNEL_ID = "cam_service_channel_id"
         val CHANNEL_NAME = "cam_service_channel_name"
 
-        private const val SERVER_URL = "ws://your_websocket_server_url"
-        private const val IMAGE_MIME_TYPE = "video/avc"
+        private const val SERVER_URL = "ws://192.168.100.17:9999/ws/image"
+        //        private const val SERVER_URL = "ws://192.168.1.41:9999/ws/image"
         private const val IMAGE_WIDTH = 1920
         private const val IMAGE_HEIGHT = 1080
+        private const val MODEL_IMAGE_WIDTH = 640
+        private const val MODEL_IMAGE_HEIGHT = 640
         private const val BUFFER_SIZE = 3
         private const val IMAGE_BIT_RATE = 3 * 1024 * 1024 // 3 Mbps
         private const val VIDEO_BITRATE = 5000000

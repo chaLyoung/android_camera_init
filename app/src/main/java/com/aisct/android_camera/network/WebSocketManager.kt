@@ -6,8 +6,10 @@ import okhttp3.Request
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import okio.ByteString.Companion.toByteString
+import com.aisct.android_camera.service.CamService as CamService
 
-class WebSocketManager(url: String) {
+class WebSocketManager(url: String, private val camService: CamService) {
     private val client = OkHttpClient()
     private var webSocket: WebSocket? = null
     private var isWebSocketConnected = false
@@ -15,7 +17,10 @@ class WebSocketManager(url: String) {
     private val webSocketListener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
             isWebSocketConnected = true
-            println("WebSocket connected!")
+            camService.spsPpsSet = false  // Reset SPS/PPS flag to resend headers
+            camService.sps?.let { sendToServer(it, "sps") }
+            camService.pps?.let { sendToServer(it, "pps") }
+            Log.d("tag_lc", "WebSocket connected!")
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -54,6 +59,11 @@ class WebSocketManager(url: String) {
 
     fun sendMessage(message: ByteString) {
         webSocket?.send(message) ?: println("WebSocket not connected!")
+    }
+
+    fun sendToServer(data: ByteArray, type: String) {
+        val message = type + "|" + data.toByteString(0, data.size).base64()
+        webSocket?.send(message)
     }
 
     fun closeConnection() {
