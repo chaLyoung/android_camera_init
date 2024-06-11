@@ -5,19 +5,25 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.SurfaceTexture
 import android.os.BatteryManager
 import android.os.Bundle
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.Surface
+import android.view.TextureView
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceRequest
 import androidx.camera.view.PreviewView
 import com.aisct.android_camera.databinding.ActivityMainBinding
 import com.aisct.android_camera.service.CamService as CamService
 import com.aisct.android_camera.util.isServiceRunning
+import java.util.concurrent.Executors
 
 class BatteryLevelReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -32,7 +38,8 @@ class BatteryLevelReceiver : BroadcastReceiver() {
 class MainActivity : AppCompatActivity() {
     private lateinit var activityResultLauncher: ActivityResultLauncher<Intent>
     private lateinit var batteryLevelReceiver: BatteryLevelReceiver
-    private lateinit var previewView: PreviewView
+//    lateinit var previewView: PreviewView
+    lateinit var previewView: TextureView
     private val mainBinding: ActivityMainBinding by lazy {
         ActivityMainBinding.inflate(layoutInflater)
     }
@@ -63,6 +70,7 @@ class MainActivity : AppCompatActivity() {
                 Log.d("tag_lc", "activityResultLauncher" + result.data.toString())
             }
         }
+        previewView = findViewById(R.id.previewView)
         initView()
         batteryLevelReceiver = BatteryLevelReceiver()
     }

@@ -8,26 +8,20 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
-import android.graphics.ImageFormat
-import android.graphics.PixelFormat
-import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
-import android.media.ImageReader
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import android.util.Size
 import android.view.LayoutInflater
 import android.view.Surface
 import android.view.TextureView
@@ -40,41 +34,48 @@ import com.aisct.android_camera.databinding.ActivityMainBinding
 import com.aisct.android_camera.model.DataProcess
 import java.io.IOException
 import java.util.Collections
-import kotlin.math.absoluteValue
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import android.graphics.Bitmap
+import android.graphics.ImageFormat
+import android.graphics.PixelFormat
+import android.graphics.SurfaceTexture
+import android.media.ImageReader
+import android.util.Range
+import android.util.Size
+import androidx.camera.view.PreviewView
 import com.aisct.android_camera.network.WebSocketManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.absoluteValue
 
 class CamService : Service() {
     // UI
     private var wm: WindowManager? = null
     private var rootView: View? = null
     private lateinit var mainBinding: ActivityMainBinding
-
+    private var textureView: TextureView? = null
     // Camera2-related stuff
     private var cameraManager: CameraManager? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
-    private var textureView: TextureView? = null
     private lateinit var webSocketManager: WebSocketManager
     private lateinit var ortEnvironment: OrtEnvironment
     private lateinit var session: OrtSession
-    private var imageReader: ImageReader? = null
-    private var isOpened = false
     private val dataProcess = DataProcess(context = this)
     private lateinit var surface: Surface
-    private lateinit var mediaCodec: MediaCodec
+    private lateinit var videoCodec: MediaCodec
+//    private lateinit var decoder: MediaCodec
+    private var imageReader: ImageReader? = null
     private val modelExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     // 코루틴 관련 변수 추가
     private val job = Job()
-    private val coroutineScope = CoroutineScope(Dispatchers.IO + job)
     var spsPpsSet = false
     var sps: ByteArray? = null
     var pps: ByteArray? = null
@@ -85,6 +86,7 @@ class CamService : Service() {
         override fun onOpened(currentCameraDevice: CameraDevice) {
             cameraDevice = currentCameraDevice
             initMediaCodec()
+//            initDecoder()
         }
         override fun onDisconnected(currentCameraDevice: CameraDevice) {
             currentCameraDevice.close()
@@ -102,8 +104,7 @@ class CamService : Service() {
             request: CaptureRequest,
             partialResult: CaptureResult
         ) {
-//            Log.d("tag_lc", "override fun onCaptureProgressed()")
-            sendVideoData()
+//            sendVideoData()
         }
         override fun onCaptureCompleted(
             session: CameraCaptureSession,
@@ -119,14 +120,14 @@ class CamService : Service() {
             val mediaFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, IMAGE_WIDTH, IMAGE_HEIGHT)
             mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, VIDEO_BITRATE)
-            mediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
+            mediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE, VIDEO_FRAME_RATE)
             mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
-            mediaCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            val capabilities = mediaCodec.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            videoCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            val capabilities = videoCodec.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
             Log.d("tag_lc", "Color formats supported: ${capabilities.colorFormats.joinToString()}")
-            mediaCodec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            surface = mediaCodec.createInputSurface()
-            mediaCodec.start()
+            videoCodec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            surface = videoCodec.createInputSurface()
+            videoCodec.start()
             createCaptureSession()
             Log.d("tag_lc", "private fun initMediaCodec() finish")
         } catch (e: IOException) {
@@ -135,35 +136,46 @@ class CamService : Service() {
         }
     }
 
+//    private fun initDecoder() {
+//        try {
+//            val mediaFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, IMAGE_WIDTH, IMAGE_HEIGHT)
+//            decoder = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+//            decoder.configure(mediaFormat, null, null, 0)
+//            decoder.start()
+//        } catch (e: IOException) {
+//            e.printStackTrace()
+//        }
+//    }
+
     private val imageListener = ImageReader.OnImageAvailableListener { reader ->
         val image = reader?.acquireLatestImage()
+//        Log.d("tag_lc", "Got image: " + image?.width + " x " + image?.height)
         if (image != null) {
+            val timestamp = System.currentTimeMillis()
+//            calculateFPS(timestamp)
+            val bitmap = dataProcess.imageToBitmap(image)
             modelExecutor.execute {
-                try {
-                    // val yuvBytes = dataProcess.imageToNV21(image)
-                    val bitmap = dataProcess.imageToBitmap(image)
-                    val floatBuffer = dataProcess.bitmapToFloatBuffer(bitmap)
-                    val inputName = session.inputNames.iterator().next() // session 이름
-                    // 모델의 요구 입력값 [1 3 640 640] [배치 사이즈, 픽셀(RGB), 너비, 높이], 모델마다 크기는 다를 수 있음.
-                    val shape = longArrayOf(
-                        DataProcess.BATCH_SIZE.toLong(),
-                        DataProcess.PIXEL_SIZE.toLong(),
-                        DataProcess.INPUT_SIZE.toLong(),
-                        DataProcess.INPUT_SIZE.toLong()
-                    )
-                    val inputTensor = OnnxTensor.createTensor(ortEnvironment, floatBuffer, shape)
-                    val resultTensor = session.run(Collections.singletonMap(inputName, inputTensor))
-                    val outputs = resultTensor.get(0).value as Array<*> // [1 84 8400]
-                    val results = dataProcess.outputsToNPMSPredictions(outputs)
-                    Log.d("tag_lc", results.toString())
-                } catch (e: Exception) {
-                    Log.d("tag_lc", "Error processing image " + e.toString())
-                } finally {
-                    Log.d("tag_lc", "image.close()")
-                    image.close()
-                }
+                sendFrame(bitmap)
             }
-            Log.d("tag_lc", "Got image: " + image?.width + " x " + image?.height)
+        }
+        // Process image here..ideally async so that you don't block the callback
+        // ..
+
+        image?.close()
+    }
+
+    private var lastTimestamp = AtomicLong(0)
+    private var frameCount = AtomicInteger(0)
+    private fun calculateFPS(currentTimestamp: Long) {
+        frameCount.incrementAndGet()
+        val lastTime = lastTimestamp.getAndSet(currentTimestamp)
+        if (lastTime > 0) {
+            val timeDiff = currentTimestamp - lastTime
+            Log.d("tag_lc", "Current timeDiff: $timeDiff")
+            if (timeDiff >= 1000) { // 1 second
+                val fps = frameCount.getAndSet(0)
+                Log.d("tag_lc", "Current FPS: $fps")
+            }
         }
     }
 
@@ -171,23 +183,29 @@ class CamService : Service() {
         Log.d("tag_lc", "CamService - private fun createCaptureSession()")
         try {
             val targetSurfaces = ArrayList<Surface>()
-            imageReader = ImageReader.newInstance(
-                MODEL_IMAGE_WIDTH, MODEL_IMAGE_HEIGHT,
-                ImageFormat.YUV_420_888, 3
-            )
+            targetSurfaces.add(surface)
+            imageReader = ImageReader.newInstance(MODEL_IMAGE_WIDTH, MODEL_IMAGE_HEIGHT, ImageFormat.YUV_420_888, 3)
             imageReader!!.setOnImageAvailableListener(imageListener, null)
-//            targetSurfaces.add(surface)
             targetSurfaces.add(imageReader!!.surface)
             cameraDevice?.createCaptureSession(targetSurfaces, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
                     val captureRequest = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-//                        addTarget(surface)
-//                        addTarget(previewSurface)
+                        if (shouldShowPreview) {
+                            val texture = textureView!!.surfaceTexture!!
+                            texture.setDefaultBufferSize(MODEL_IMAGE_WIDTH, MODEL_IMAGE_HEIGHT)
+                            val previewSurface = Surface(texture)
+                            targetSurfaces.add(previewSurface)
+                            addTarget(previewSurface)
+                        }
+                        addTarget(surface)
                         addTarget(imageReader!!.surface)
 //                        set(CaptureRequest.JPEG_ORIENTATION, 0)
                         set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                         set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                        set(CaptureRequest.SCALER_CROP_REGION, android.graphics.Rect(0, 0, 640, 640)) // 해상도 설정
+                        val fpsRange = Range(VIDEO_FRAME_RATE, VIDEO_FRAME_RATE)
+                        set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
                     }
                     Log.d("tag_lc", "CamService - CameraCaptureSession.StateCallback()")
                     session.setRepeatingRequest(captureRequest.build(), captureStateCallback, null)
@@ -205,16 +223,16 @@ class CamService : Service() {
 
     private fun sendVideoData() {
         val bufferInfo = MediaCodec.BufferInfo()
-        if(isOpened) {
+        if(webSocketManager.isConnected()) {
             try {
-                val outputBufferIndex = mediaCodec.dequeueOutputBuffer(bufferInfo, 10000)
+                val outputBufferIndex = videoCodec.dequeueOutputBuffer(bufferInfo, 10000)
                 if (outputBufferIndex >= 0) {
-                    val outputBuffer = mediaCodec.getOutputBuffer(outputBufferIndex)
+                    val outputBuffer = videoCodec.getOutputBuffer(outputBufferIndex)
                     val data = ByteArray(bufferInfo.size)
                     outputBuffer?.get(data)
 //                    webSocket.send(ByteString.of(*data))
 //                    webSocketManager.sendMessage(ByteString.of(*data))
-//                    mediaCodec.releaseOutputBuffer(outputBufferIndex, false)
+                    videoCodec.releaseOutputBuffer(outputBufferIndex, false)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -222,6 +240,51 @@ class CamService : Service() {
             }
         } else {
 //            Log.d("tag_lc", "----------------------- send is not opened -----------------")
+        }
+    }
+//    private fun decodeToBitmap(h264Data: ByteArray) {
+//        try {
+//            val inputBufferIndex = decoder.dequeueInputBuffer(10000)
+//            if (inputBufferIndex >= 0) {
+//                val inputBuffer = decoder.getInputBuffer(inputBufferIndex)
+//                if (inputBuffer != null && h264Data.size <= inputBuffer.capacity()) {
+//                    inputBuffer.clear()
+//                    inputBuffer.put(h264Data)
+//                    decoder.queueInputBuffer(inputBufferIndex, 0, h264Data.size, 0, 0)
+//                } else {
+//                    Log.d("tag_lc", "Input buffer is null or H264 data size is too large")
+//                }
+//            }
+//
+//            val bufferInfo = MediaCodec.BufferInfo()
+//            val outputBufferIndex = decoder.dequeueOutputBuffer(bufferInfo, 10000)
+//            if (outputBufferIndex >= 0) {
+//                val outputBuffer = decoder.getOutputBuffer(outputBufferIndex)
+//                val image = decoder.getOutputImage(outputBufferIndex)
+//                Log.d("tag_lc", image.toString())
+//                decoder.releaseOutputBuffer(outputBufferIndex, false)
+//            }
+//        } catch (e: Exception) {
+//            Log.d("tag_lc", "Error decoding H264 data to Bitmap " + e.toString())
+//        }
+//    }
+
+    private fun sendFrame(bitmap: Bitmap) {
+        if (bitmap != null) {
+            val floatBuffer = dataProcess.bitmapToFloatBuffer(bitmap)
+            val inputName = session.inputNames.iterator().next() // session 이름
+            //모델의 요구 입력값 [1 3 640 640] [배치 사이즈, 픽셀(RGB), 너비, 높이], 모델마다 크기는 다를 수 있음.
+            val shape = longArrayOf(
+                DataProcess.BATCH_SIZE.toLong(),
+                DataProcess.PIXEL_SIZE.toLong(),
+                DataProcess.INPUT_SIZE.toLong(),
+                DataProcess.INPUT_SIZE.toLong()
+            )
+            val inputTensor = OnnxTensor.createTensor(ortEnvironment, floatBuffer, shape)
+            val resultTensor = session.run(Collections.singletonMap(inputName, inputTensor))
+            val outputs = resultTensor.get(0).value as Array<*> // [1 84 8400]
+            val results = dataProcess.outputsToNPMSPredictions(outputs)
+            Log.d("tag_lc", results.toString())
         }
     }
 
@@ -242,11 +305,28 @@ class CamService : Service() {
             val characteristics = cameraManager!!.getCameraCharacteristics(id)
             val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
             Log.d("tag_lc", "cameraManager!!.cameraIdList.toString() : " + characteristics.toString())
+            // 후면 카메라인지 확인
+//            if (facing == CameraCharacteristics.LENS_FACING_BACK) {
+//                // 카메라 ID 출력
+//                Log.d("tag_lc", "Camera ID: $id")
+//
+//                // 지원 해상도 확인
+//                val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+//                val sizes = map!!.getOutputSizes(SurfaceTexture::class.java)
+//                Log.d("tag_lc", "Supported Sizes for Camera $id: ${sizes.joinToString()}")
+//
+//                // 특정 해상도를 지원하는지 확인
+//                val supportsResolution = sizes.any { it.width == 1440 && it.height == 1440 }
+//                if (supportsResolution) {
+//                    camId = id
+//                }
+//            }
             if (facing == CameraCharacteristics.LENS_FACING_BACK) {
                 camId = id
                 break
             }
         }
+        Log.d("tag_lc", "Camera ID: $camId")
         try {
             cameraManager!!.openCamera(camId!!, cameraStateCallback, null)
         } catch (e:SecurityException) {
@@ -279,16 +359,19 @@ class CamService : Service() {
 
     private fun start() {
         shouldShowPreview = false
+        initOverlay()
+//        textureView!!.surfaceTextureListener = surfaceTextureListener
         initModelSession()
         webSocketManager = WebSocketManager(SERVER_URL, this)
-        initCamera(1920, 1080)
+        initCamera(1920, 1440)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         try {
-            mediaCodec.stop()
-            mediaCodec.release()
+            videoCodec.stop()
+            videoCodec.release()
+            modelExecutor.shutdown()
             webSocketManager.closeConnection()
             stopCamera()
         } catch (e: Exception) {
@@ -304,20 +387,38 @@ class CamService : Service() {
         try {
             captureSession?.close()
             captureSession = null
-
-            cameraDevice?.close()
-            cameraDevice = null
-
             imageReader?.close()
             imageReader = null
-
+            cameraDevice?.close()
+            cameraDevice = null
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
+    private fun initOverlay() {
+        val li = getSystemService(Context.LAYOUT_INFLATER_SERVICE) as LayoutInflater
+        rootView = li.inflate(R.layout.overlay, null)
+        Log.d("tag_lc", "rootView - $rootView")
+        textureView = rootView?.findViewById(R.id.texPreview)
+        Log.d("tag_lc", "textureView - $textureView")
+        val type = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O)
+            WindowManager.LayoutParams.TYPE_SYSTEM_OVERLAY
+        else
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+
+        val params = WindowManager.LayoutParams(
+            type,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        )
+
+        wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        Log.d("tag_lc", "wm - $wm")
+        wm!!.addView(rootView, params)
+    }
+
     private fun startForeground() {
-        Log.d("tag_lc", "CamService - private fun startForeground()")
         val pendingIntent: PendingIntent =
             Intent(this, MainActivity::class.java).let { notificationIntent ->
                 PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0))
@@ -344,7 +445,6 @@ class CamService : Service() {
         startForeground(ONGOING_NOTIFICATION_ID, notification)
     }
     companion object {
-        val TAG = "CamService"
         val ACTION_START = "eu.sisik.backgroundcam.action.START"
         val ACTION_STOP = "eu.sisik.backgroundcam.action.STOP"
         val ACTION_STOPPED = "eu.sisik.backgroundcam.action.STOPPED"
@@ -355,13 +455,13 @@ class CamService : Service() {
         private const val SERVER_URL = "ws://192.168.100.17:9999/ws/image"
         //        private const val SERVER_URL = "ws://192.168.1.41:9999/ws/image"
         private const val IMAGE_WIDTH = 1920
-        private const val IMAGE_HEIGHT = 1080
-        private const val MODEL_IMAGE_WIDTH = 640
-        private const val MODEL_IMAGE_HEIGHT = 640
+        private const val IMAGE_HEIGHT = 1440
+        private const val MODEL_IMAGE_WIDTH = 1088
+        private const val MODEL_IMAGE_HEIGHT = 1088
         private const val BUFFER_SIZE = 3
         private const val IMAGE_BIT_RATE = 3 * 1024 * 1024 // 3 Mbps
         private const val VIDEO_BITRATE = 5000000
-        private const val FRAME_RATE = 25
+        private const val VIDEO_FRAME_RATE = 25
         private const val I_FRAME_INTERVAL = 1
     }
 }

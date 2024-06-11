@@ -4,9 +4,12 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.YuvImage
 import android.media.Image
+import android.media.ImageReader
+import android.util.Log
 import androidx.camera.core.ImageProxy
 import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
@@ -56,7 +59,8 @@ class DataProcess(val context: Context) {
         val out = ByteArrayOutputStream()
         yuvImage.compressToJpeg(android.graphics.Rect(0, 0, image.width, image.height), 100, out)
         val imageBytes: ByteArray = out.toByteArray()
-        return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        return Bitmap.createScaledBitmap(bitmap, INPUT_SIZE, INPUT_SIZE, true)
     }
 
     fun bitmapToFloatBuffer(bitmap: Bitmap): FloatBuffer {

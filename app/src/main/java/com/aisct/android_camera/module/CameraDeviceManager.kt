@@ -117,7 +117,7 @@ object CameraDeviceManager {
                 prepareCameraCaptureSession()
             }
         } catch (e: CameraAccessException) {
-            Log.e(CamService.TAG, "createCaptureSession", e)
+            Log.e("tag_lc", "createCaptureSession", e)
         }
     }
 
@@ -138,11 +138,11 @@ object CameraDeviceManager {
                         captureRequest = requestBuilder!!.build()
                         captureSession!!.setRepeatingRequest(captureRequest!!, captureCallback, null)
                     } catch (e: CameraAccessException) {
-                        Log.e(CamService.TAG, "createCaptureSession", e)
+                        Log.e("tag_lc", "createCaptureSession", e)
                     }
                 }
                 override fun onConfigureFailed(cameraCaptureSession: CameraCaptureSession) {
-                    Log.e(CamService.TAG, "createCaptureSession()")
+                    Log.e("tag_lc", "createCaptureSession()")
                 }
             }, null
         )
@@ -160,7 +160,7 @@ object CameraDeviceManager {
             requestBuilder.addTarget(imageReader!!.surface)
             prepareCameraCaptureSession()
         } catch (e: CameraAccessException) {
-            Log.e(CamService.TAG, "createCaptureSession", e)
+            Log.e("tag_lc", "createCaptureSession", e)
         }
     }
 

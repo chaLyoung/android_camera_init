@@ -18,8 +18,8 @@ class WebSocketManager(url: String, private val camService: CamService) {
         override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
             isWebSocketConnected = true
             camService.spsPpsSet = false  // Reset SPS/PPS flag to resend headers
-            camService.sps?.let { sendToServer(it, "sps") }
-            camService.pps?.let { sendToServer(it, "pps") }
+//            camService.sps?.let { sendToServer(it, "sps") }
+//            camService.pps?.let { sendToServer(it, "pps") }
             Log.d("tag_lc", "WebSocket connected!")
         }
 
