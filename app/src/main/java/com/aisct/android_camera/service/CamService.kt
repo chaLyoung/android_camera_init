@@ -49,6 +49,7 @@ import com.aisct.android_camera.network.WebSocketManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import okio.ByteString
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -58,6 +59,7 @@ import kotlin.math.absoluteValue
 class CamService : Service() {
     // UI
     private var wm: WindowManager? = null
+    private var windowManager: WindowManager? = null
     private var rootView: View? = null
     private lateinit var mainBinding: ActivityMainBinding
     private var textureView: TextureView? = null
@@ -104,7 +106,7 @@ class CamService : Service() {
             request: CaptureRequest,
             partialResult: CaptureResult
         ) {
-//            sendVideoData()
+            sendVideoData()
         }
         override fun onCaptureCompleted(
             session: CameraCaptureSession,
@@ -154,9 +156,9 @@ class CamService : Service() {
             val timestamp = System.currentTimeMillis()
 //            calculateFPS(timestamp)
             val bitmap = dataProcess.imageToBitmap(image)
-            modelExecutor.execute {
-                sendFrame(bitmap)
-            }
+//            modelExecutor.execute {
+//                sendFrame(bitmap)
+//            }
         }
         // Process image here..ideally async so that you don't block the callback
         // ..
@@ -191,19 +193,16 @@ class CamService : Service() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
                     val captureRequest = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                        if (shouldShowPreview) {
-                            val texture = textureView!!.surfaceTexture!!
-                            texture.setDefaultBufferSize(MODEL_IMAGE_WIDTH, MODEL_IMAGE_HEIGHT)
-                            val previewSurface = Surface(texture)
-                            targetSurfaces.add(previewSurface)
-                            addTarget(previewSurface)
-                        }
+//                        val texture = textureView!!.surfaceTexture!!
+//                        texture.setDefaultBufferSize(IMAGE_WIDTH, IMAGE_HEIGHT)
+//                        val previewSurface = Surface(texture)
+//                        targetSurfaces.add(previewSurface)
+//                        addTarget(previewSurface)
                         addTarget(surface)
                         addTarget(imageReader!!.surface)
-//                        set(CaptureRequest.JPEG_ORIENTATION, 0)
+                        set(CaptureRequest.JPEG_ORIENTATION, 270)
                         set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                         set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
-                        set(CaptureRequest.SCALER_CROP_REGION, android.graphics.Rect(0, 0, 640, 640)) // 해상도 설정
                         val fpsRange = Range(VIDEO_FRAME_RATE, VIDEO_FRAME_RATE)
                         set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
                     }
@@ -212,7 +211,7 @@ class CamService : Service() {
                 }
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
-                    Log.d("tag_lc", session.toString())
+                    Log.d("tag_lc", "session " + session.toString())
                 }
             }, null)
         } catch (e: CameraAccessException) {
@@ -231,7 +230,7 @@ class CamService : Service() {
                     val data = ByteArray(bufferInfo.size)
                     outputBuffer?.get(data)
 //                    webSocket.send(ByteString.of(*data))
-//                    webSocketManager.sendMessage(ByteString.of(*data))
+                    webSocketManager.sendMessage(ByteString.of(*data))
                     videoCodec.releaseOutputBuffer(outputBufferIndex, false)
                 }
             } catch (e: Exception) {
@@ -242,32 +241,6 @@ class CamService : Service() {
 //            Log.d("tag_lc", "----------------------- send is not opened -----------------")
         }
     }
-//    private fun decodeToBitmap(h264Data: ByteArray) {
-//        try {
-//            val inputBufferIndex = decoder.dequeueInputBuffer(10000)
-//            if (inputBufferIndex >= 0) {
-//                val inputBuffer = decoder.getInputBuffer(inputBufferIndex)
-//                if (inputBuffer != null && h264Data.size <= inputBuffer.capacity()) {
-//                    inputBuffer.clear()
-//                    inputBuffer.put(h264Data)
-//                    decoder.queueInputBuffer(inputBufferIndex, 0, h264Data.size, 0, 0)
-//                } else {
-//                    Log.d("tag_lc", "Input buffer is null or H264 data size is too large")
-//                }
-//            }
-//
-//            val bufferInfo = MediaCodec.BufferInfo()
-//            val outputBufferIndex = decoder.dequeueOutputBuffer(bufferInfo, 10000)
-//            if (outputBufferIndex >= 0) {
-//                val outputBuffer = decoder.getOutputBuffer(outputBufferIndex)
-//                val image = decoder.getOutputImage(outputBufferIndex)
-//                Log.d("tag_lc", image.toString())
-//                decoder.releaseOutputBuffer(outputBufferIndex, false)
-//            }
-//        } catch (e: Exception) {
-//            Log.d("tag_lc", "Error decoding H264 data to Bitmap " + e.toString())
-//        }
-//    }
 
     private fun sendFrame(bitmap: Bitmap) {
         if (bitmap != null) {
@@ -284,7 +257,7 @@ class CamService : Service() {
             val resultTensor = session.run(Collections.singletonMap(inputName, inputTensor))
             val outputs = resultTensor.get(0).value as Array<*> // [1 84 8400]
             val results = dataProcess.outputsToNPMSPredictions(outputs)
-            Log.d("tag_lc", results.toString())
+//            Log.d("tag_lc", results.toString())
         }
     }
 
@@ -353,17 +326,17 @@ class CamService : Service() {
         super.onCreate()
         val inflater = LayoutInflater.from(this)
         mainBinding = ActivityMainBinding.inflate(inflater, null, false)
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         sendBroadcast(Intent(ACTION_START))
         startForeground()
     }
 
     private fun start() {
-        shouldShowPreview = false
         initOverlay()
 //        textureView!!.surfaceTextureListener = surfaceTextureListener
         initModelSession()
         webSocketManager = WebSocketManager(SERVER_URL, this)
-        initCamera(1920, 1440)
+        initCamera(IMAGE_WIDTH, IMAGE_HEIGHT)
     }
 
     override fun onDestroy() {
@@ -454,8 +427,8 @@ class CamService : Service() {
 
         private const val SERVER_URL = "ws://192.168.100.17:9999/ws/image"
         //        private const val SERVER_URL = "ws://192.168.1.41:9999/ws/image"
-        private const val IMAGE_WIDTH = 1920
-        private const val IMAGE_HEIGHT = 1440
+        private const val IMAGE_WIDTH = 2992
+        private const val IMAGE_HEIGHT = 2992
         private const val MODEL_IMAGE_WIDTH = 1088
         private const val MODEL_IMAGE_HEIGHT = 1088
         private const val BUFFER_SIZE = 3
